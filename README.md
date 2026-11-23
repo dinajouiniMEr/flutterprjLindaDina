@@ -52,6 +52,13 @@ réclamations. Connectez-vous ensuite avec les comptes Auth correspondants.
 
 Le résumé utilise Gemini (`gemini-3.5-flash-lite`, gratuit).
 
+Pour voir directement le tableau de bord de démonstration avec `Dina Jouini` et
+`Mme Linda Wadaa`, sans écran de connexion Supabase :
+
+```powershell
+flutter run --dart-define=SUPABASE_URL= --dart-define=SUPABASE_PUBLISHABLE_KEY=
+```
+
 ### Mode démo sans Supabase (disponible tout de suite)
 
 Option A — injecter la clé au lancement, sans champ à remplir :

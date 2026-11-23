@@ -183,7 +183,6 @@ class AuthGate extends StatelessWidget {
             return DashboardGate(
               client: client,
               role: AppRoleLabels.fromDatabase(profile['role']),
-              name: profile['full_name'] as String? ?? 'Utilisateur',
             );
           },
         );
@@ -335,19 +334,17 @@ class DashboardGate extends StatelessWidget {
   const DashboardGate({
     this.client,
     this.role = AppRole.student,
-    this.name,
     super.key,
   });
 
   final SupabaseClient? client;
   final AppRole role;
-  final String? name;
 
   @override
   Widget build(BuildContext context) => AttendanceDashboard(
     repository: client == null ? null : AttendanceRepository(client!),
     initialRole: role,
-    userName: name ?? role.firstName,
+    userName: role.firstName,
   );
 }
 
