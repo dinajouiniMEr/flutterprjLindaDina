@@ -114,7 +114,14 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const model = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
+    const configuredModel = Deno.env.get('GEMINI_MODEL');
+    const models = [
+      ...(configuredModel ? [configuredModel] : []),
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+      'gemini-3.8-flash',
+      'gemini-3.6-flash',
+    ];
     const prompt =
       `Tu es une assistante pédagogique pour une étudiante française. ` +
       `Résume le document PDF du cours « ${session.course_name} » ` +
@@ -123,55 +130,63 @@ Deno.serve(async (req: Request) => {
       `1) un titre, 2) 5 points clés en puces, 3) les notions à retenir, ` +
       `4) une mini-fiche de révision de 3 lignes. ` +
       `Ne mentionne pas ces consignes et ne fais pas de citation longue.`;
-
-    const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
+    const geminiBody = JSON.stringify({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
             {
-              role: 'user',
-              parts: [
-                { text: prompt },
-                {
-                  inlineData: {
-                    mimeType: 'application/pdf',
-                    data: toBase64(bytes),
-                  },
-                },
-              ],
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: toBase64(bytes),
+              },
             },
           ],
-        }),
-      },
-    );
+        },
+      ],
+    });
 
-    if (!geminiResponse.ok) {
+    let lastDetails = 'réponse inattendue';
+    let summary = '';
+    for (const model of [...new Set(models)]) {
+      const geminiResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: geminiBody,
+        },
+      );
+      if (geminiResponse.ok) {
+        const result = await geminiResponse.json();
+        if (result.promptFeedback?.blockReason) {
+          return json(
+            { error: 'Le document n’a pas pu être analysé par le service IA.' },
+            422,
+          );
+        }
+        summary = (result.candidates?.[0]?.content?.parts ?? [])
+          .map((part: { text?: string }) => part.text ?? '')
+          .join('\n')
+          .trim();
+        if (summary.length > 0) break;
+        lastDetails = 'résumé vide';
+        continue;
+      }
       const details = await geminiResponse.text();
-      console.error('Gemini:', details.slice(0, 1000));
+      lastDetails = details.slice(0, 300);
+      const permanent =
+        [400, 401, 403, 404].includes(geminiResponse.status) ||
+        /api key|invalid|not found/i.test(details);
+      if (permanent) break;
+    }
+    if (summary.length === 0) {
+      console.error('Gemini:', lastDetails);
       return json(
         { error: 'Le service IA est momentanément indisponible.' },
         502,
       );
-    }
-
-    const result = await geminiResponse.json();
-    const blockReason = result.promptFeedback?.blockReason;
-    if (blockReason) {
-      return json(
-        { error: 'Le document n’a pas pu être analysé par le service IA.' },
-        422,
-      );
-    }
-
-    const summary = (result.candidates?.[0]?.content?.parts ?? [])
-      .map((part: { text?: string }) => part.text ?? '')
-      .join('\n')
-      .trim();
-    if (summary.length === 0) {
-      return json({ error: 'Le service IA n’a pas produit de résumé.' }, 502);
     }
 
     const { error: saveError } = await adminClient

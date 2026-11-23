@@ -3070,16 +3070,7 @@ class _LocalSummaryDialogState extends State<_LocalSummaryDialog> {
                     ),
                   )
                 else
-                  const InputDecorator(
-                    decoration: InputDecoration(
-                      labelText: 'Clé Gemini intégrée au build',
-                      prefixIcon: Icon(Icons.key_outlined),
-                    ),
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Text('Disponible pour cette session'),
-                    ),
-                  ),
+                  const SizedBox.shrink(),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: _loading ? null : _pickPdf,

@@ -77,7 +77,9 @@ clé reste uniquement en mémoire pendant la session.
 
 Dans les deux cas : ouvrez le menu `⋯` d'une séance, choisissez le PDF depuis
 l'appareil (10 Mo maximum), puis **Générer le résumé**. Aucun appel ne passe par
-Supabase dans ce mode.
+Supabase dans ce mode. Si un modèle est saturé, l'application essaie
+automatiquement `gemini-3.1-flash-lite`, `gemini-3.8-flash` puis
+`gemini-3.6-flash`.
 
 ### Mode Supabase (à faire par la personne qui administre le projet)
 
