@@ -3,6 +3,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:presence_scolaire/main.dart';
 
 void main() {
+  testWidgets('app starts in demo mode without Supabase', (tester) async {
+    await tester.pumpWidget(const AttendanceApp(supabaseEnabled: false));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Bonjour Dina Jouini'), findsOneWidget);
+    expect(find.text('Mon emploi du temps'), findsOneWidget);
+  });
+
   testWidgets('dashboard opens in French and navigation shows claims', (
     tester,
   ) async {

@@ -28,10 +28,11 @@ Future<void> main() async {
     'SUPABASE_PUBLISHABLE_KEY',
     defaultValue: 'sb_publishable_aLHA-ssDMkjj-B-JRj1r_A_jYa-E_aM',
   );
-  if (url.isNotEmpty && publishableKey.isNotEmpty) {
+  final supabaseEnabled = url.isNotEmpty && publishableKey.isNotEmpty;
+  if (supabaseEnabled) {
     await Supabase.initialize(url: url, publishableKey: publishableKey);
   }
-  runApp(const AttendanceApp());
+  runApp(AttendanceApp(supabaseEnabled: supabaseEnabled));
 }
 
 enum AppRole { student, teacher, director }
@@ -63,13 +64,12 @@ extension AppRoleLabels on AppRole {
 }
 
 class AttendanceApp extends StatelessWidget {
-  const AttendanceApp({super.key});
+  const AttendanceApp({super.key, this.supabaseEnabled = true});
+
+  final bool supabaseEnabled;
 
   @override
   Widget build(BuildContext context) {
-    final client = Supabase.instance.isInitialized
-        ? Supabase.instance.client
-        : null;
     return MaterialApp(
       title: 'Présence',
       debugShowCheckedModeBanner: false,
@@ -116,7 +116,9 @@ class AttendanceApp extends StatelessWidget {
           ),
         ),
       ),
-      home: client == null ? const DashboardGate() : AuthGate(client: client),
+      home: supabaseEnabled
+          ? AuthGate(client: Supabase.instance.client)
+          : const DashboardGate(),
     );
   }
 }
