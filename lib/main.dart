@@ -1,7 +1,11 @@
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'data/attendance_repository.dart';
+import 'data/gemini_summary_service.dart';
 
 const _ink = Color(0xFF28233A);
 const _muted = Color(0xFF8A8798);
@@ -40,8 +44,8 @@ extension AppRoleLabels on AppRole {
   };
 
   String get firstName => switch (this) {
-    AppRole.student => 'Yasmine',
-    AppRole.teacher => 'M. Karim',
+    AppRole.student => 'Dina Jouini',
+    AppRole.teacher => 'Mme Linda Wadaa',
     AppRole.director => 'Mme Nadia',
   };
 
@@ -392,6 +396,9 @@ class AttendanceDashboard extends StatefulWidget {
 class _AttendanceDashboardState extends State<AttendanceDashboard> {
   late AppRole _role = widget.initialRole;
   _Page _page = _Page.overview;
+  bool _searchVisible = false;
+  final _searchController = TextEditingController();
+  String _localApiKey = kGeminiApiKeyFromBuild;
   late Future<List<SchoolSession>> _sessionsFuture;
   late Future<List<AttendanceClaim>> _claimsFuture;
   late Future<List<AttendanceEntry>> _attendanceFuture;
@@ -403,6 +410,21 @@ class _AttendanceDashboardState extends State<AttendanceDashboard> {
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  String get _query => _searchController.text.trim().toLowerCase();
+
+  void _onSearchChanged() => setState(() {});
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {});
   }
 
   void _reload() {
@@ -593,6 +615,18 @@ class _AttendanceDashboardState extends State<AttendanceDashboard> {
                   title: const BrandMark(compact: true),
                   actions: [
                     IconButton(
+                      tooltip: _searchVisible
+                          ? 'Masquer la recherche'
+                          : 'Rechercher',
+                      onPressed: () =>
+                          setState(() => _searchVisible = !_searchVisible),
+                      icon: Icon(
+                        _searchVisible
+                            ? Icons.search_off_rounded
+                            : Icons.search_rounded,
+                      ),
+                    ),
+                    IconButton(
                       tooltip: 'Notifications',
                       onPressed: () =>
                           _showMessage('Aucune nouvelle notification.'),
@@ -642,33 +676,52 @@ class _AttendanceDashboardState extends State<AttendanceDashboard> {
                         userName: _displayName,
                         onNotification: () =>
                             _showMessage('Aucune nouvelle notification.'),
+                        controller: _searchController,
+                        onChanged: _onSearchChanged,
+                        onClear: _clearSearch,
+                      ),
+                    if (!desktop && _searchVisible)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                        color: Colors.white,
+                        child: _SearchField(
+                          controller: _searchController,
+                          onChanged: _onSearchChanged,
+                          onClear: _clearSearch,
+                        ),
                       ),
                     Expanded(
                       child: FutureBuilder<List<SchoolSession>>(
                         future: _sessionsFuture,
                         builder: (context, sessionSnapshot) {
-                          final sessions =
+                          final allSessions =
                               sessionSnapshot.data ??
                               (widget.repository == null
                                   ? _demoSessions
                                   : const <SchoolSession>[]);
+                          final sessions = _filterSessions(allSessions, _query);
                           return FutureBuilder<List<AttendanceClaim>>(
                             future: _claimsFuture,
                             builder: (context, claimSnapshot) {
-                              final claims =
-                                  claimSnapshot.data ??
-                                  (widget.repository == null
-                                      ? _demoClaims
-                                      : const <AttendanceClaim>[]);
+                              final claims = _filterClaims(
+                                claimSnapshot.data ??
+                                    (widget.repository == null
+                                        ? _demoClaims
+                                        : const <AttendanceClaim>[]),
+                                _query,
+                              );
                               if (_page == _Page.overview) {
                                 return FutureBuilder<List<AttendanceEntry>>(
                                   future: _attendanceFuture,
                                   builder: (context, attendanceSnapshot) {
-                                    final attendance =
-                                        attendanceSnapshot.data ??
-                                        (widget.repository == null
-                                            ? _demoAttendance
-                                            : const <AttendanceEntry>[]);
+                                    final attendance = _filterAttendance(
+                                      attendanceSnapshot.data ??
+                                          (widget.repository == null
+                                              ? _demoAttendance
+                                              : const <AttendanceEntry>[]),
+                                      _query,
+                                    );
                                     return _OverviewPage(
                                       role: _role,
                                       userName: _displayName,
@@ -690,6 +743,8 @@ class _AttendanceDashboardState extends State<AttendanceDashboard> {
                                       onDeclare: _declareAttendance,
                                       onClaim: _openClaimForm,
                                       onResolve: _resolveClaim,
+                                      onSummary: _showCourseSummary,
+                                      onUploadPdf: _uploadPdfForRole,
                                     );
                                   },
                                 );
@@ -703,6 +758,8 @@ class _AttendanceDashboardState extends State<AttendanceDashboard> {
                                       ConnectionState.waiting,
                                   error: sessionSnapshot.error,
                                   onDeclare: _declareAttendance,
+                                  onSummary: _showCourseSummary,
+                                  onUploadPdf: _uploadPdfForRole,
                                 );
                               }
                               if (_page == _Page.attendance) {
@@ -717,6 +774,9 @@ class _AttendanceDashboardState extends State<AttendanceDashboard> {
                                   onDeclare: _declareAttendance,
                                   onClaim: _openClaimForm,
                                   onValidate: _validateAttendance,
+                                  searchQuery: _query,
+                                  onSummary: _showCourseSummary,
+                                  onUploadPdf: _uploadPdfForRole,
                                 );
                               }
                               return _ClaimsPage(
@@ -760,6 +820,69 @@ class _AttendanceDashboardState extends State<AttendanceDashboard> {
     );
     if (result != null && mounted) {
       await _submitClaim(selectedSession, result.$1, result.$2);
+    }
+  }
+
+  void Function(SchoolSession)? get _uploadPdfForRole =>
+      _role == AppRole.student ? null : _uploadCoursePdf;
+
+  Future<void> _showCourseSummary(SchoolSession session) async {
+    final repository = widget.repository;
+    if (repository == null) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => _LocalSummaryDialog(
+          courseName: session.courseName,
+          courseCode: session.courseCode,
+          initialApiKey: _localApiKey,
+          onApiKeyChanged: (key) => _localApiKey = key,
+        ),
+      );
+      return;
+    }
+    final summaryFuture = repository.summarizeCourse(session.id);
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _SummaryDialog(
+        courseName: session.courseName,
+        future: summaryFuture,
+      ),
+    );
+  }
+
+  Future<void> _uploadCoursePdf(SchoolSession session) async {
+    final repository = widget.repository;
+    if (repository == null) {
+      _showMessage('Mode démo : connectez Supabase pour joindre un PDF.');
+      return;
+    }
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf'],
+      withData: true,
+    );
+    if (!mounted || result == null || result.files.isEmpty) return;
+    final file = result.files.single;
+    final bytes = file.bytes;
+    if (bytes == null) {
+      _showMessage('Impossible de lire ce fichier.', isError: true);
+      return;
+    }
+    if (bytes.length > 10 * 1024 * 1024) {
+      _showMessage('Le PDF doit faire moins de 10 Mo.', isError: true);
+      return;
+    }
+    try {
+      await repository.attachCoursePdf(
+        session.id,
+        fileName: file.name,
+        bytes: bytes,
+      );
+      if (!mounted) return;
+      setState(_reload);
+      _showMessage('Le PDF du cours a été joint.');
+    } catch (error) {
+      _showMessage('Envoi du PDF impossible : $error', isError: true);
     }
   }
 }
@@ -962,16 +1085,62 @@ class _NavItem extends StatelessWidget {
   }
 }
 
+class _SearchField extends StatelessWidget {
+  const _SearchField({
+    required this.controller,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final VoidCallback onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      key: const Key('search_field'),
+      controller: controller,
+      onChanged: (_) => onChanged(),
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: 'Rechercher un cours, une salle, un étudiant...',
+        prefixIcon: const Icon(Icons.search_rounded, size: 19),
+        suffixIcon: controller.text.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Effacer la recherche',
+                icon: const Icon(Icons.close_rounded, size: 18),
+                onPressed: onClear,
+              ),
+        filled: true,
+        fillColor: _canvas,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+}
+
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.role,
     required this.userName,
     required this.onNotification,
+    required this.controller,
+    required this.onChanged,
+    required this.onClear,
   });
 
   final AppRole role;
   final String userName;
   final VoidCallback onNotification;
+  final TextEditingController controller;
+  final VoidCallback onChanged;
+  final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
@@ -993,20 +1162,12 @@ class _TopBar extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          Container(
-            width: 230,
-            height: 40,
-            decoration: BoxDecoration(
-              color: _canvas,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const TextField(
-              decoration: InputDecoration(
-                hintText: 'Rechercher...',
-                prefixIcon: Icon(Icons.search_rounded, size: 19),
-                contentPadding: EdgeInsets.zero,
-                border: InputBorder.none,
-              ),
+          SizedBox(
+            width: 260,
+            child: _SearchField(
+              controller: controller,
+              onChanged: onChanged,
+              onClear: onClear,
             ),
           ),
           const SizedBox(width: 18),
@@ -1117,6 +1278,8 @@ class _OverviewPage extends StatelessWidget {
     required this.onDeclare,
     required this.onClaim,
     required this.onResolve,
+    required this.onSummary,
+    required this.onUploadPdf,
   });
 
   final AppRole role;
@@ -1130,6 +1293,8 @@ class _OverviewPage extends StatelessWidget {
   final void Function(SchoolSession, bool) onDeclare;
   final ValueChanged<SchoolSession?> onClaim;
   final void Function(AttendanceClaim, String) onResolve;
+  final void Function(SchoolSession) onSummary;
+  final void Function(SchoolSession)? onUploadPdf;
 
   @override
   Widget build(BuildContext context) {
@@ -1178,6 +1343,8 @@ class _OverviewPage extends StatelessWidget {
                 role: role,
                 onViewAll: () => onNavigate(_Page.schedule),
                 onDeclare: onDeclare,
+                onSummary: onSummary,
+                onUploadPdf: onUploadPdf,
               );
               final claimsPreview = _ClaimsPreview(
                 claims: claims,
@@ -1651,12 +1818,16 @@ class _SchedulePreview extends StatelessWidget {
     required this.role,
     required this.onViewAll,
     required this.onDeclare,
+    required this.onSummary,
+    required this.onUploadPdf,
   });
 
   final List<SchoolSession> sessions;
   final AppRole role;
   final VoidCallback onViewAll;
   final void Function(SchoolSession, bool) onDeclare;
+  final void Function(SchoolSession) onSummary;
+  final void Function(SchoolSession)? onUploadPdf;
 
   @override
   Widget build(BuildContext context) {
@@ -1689,6 +1860,10 @@ class _SchedulePreview extends StatelessWidget {
                 onDeclareAbsent: role == AppRole.student
                     ? () => onDeclare(session, false)
                     : null,
+                onSummary: () => onSummary(session),
+                onUploadPdf: onUploadPdf == null
+                    ? null
+                    : () => onUploadPdf!(session),
               ),
             ),
         ],
@@ -1753,6 +1928,8 @@ class _SchedulePage extends StatefulWidget {
     required this.isLoading,
     required this.error,
     required this.onDeclare,
+    required this.onSummary,
+    required this.onUploadPdf,
   });
 
   final AppRole role;
@@ -1760,6 +1937,8 @@ class _SchedulePage extends StatefulWidget {
   final bool isLoading;
   final Object? error;
   final void Function(SchoolSession, bool) onDeclare;
+  final void Function(SchoolSession) onSummary;
+  final void Function(SchoolSession)? onUploadPdf;
 
   @override
   State<_SchedulePage> createState() => _SchedulePageState();
@@ -1904,6 +2083,10 @@ class _SchedulePageState extends State<_SchedulePage> {
                       onDeclareAbsent: widget.role == AppRole.student
                           ? () => widget.onDeclare(session, false)
                           : null,
+                      onSummary: () => widget.onSummary(session),
+                      onUploadPdf: widget.onUploadPdf == null
+                          ? null
+                          : () => widget.onUploadPdf!(session),
                     ),
                   ),
               ],
@@ -1925,6 +2108,9 @@ class _AttendancePage extends StatelessWidget {
     required this.onDeclare,
     required this.onClaim,
     required this.onValidate,
+    required this.searchQuery,
+    required this.onSummary,
+    required this.onUploadPdf,
   });
 
   final AppRole role;
@@ -1935,6 +2121,9 @@ class _AttendancePage extends StatelessWidget {
   final void Function(SchoolSession, bool) onDeclare;
   final ValueChanged<SchoolSession?> onClaim;
   final void Function(AttendanceEntry, String) onValidate;
+  final String searchQuery;
+  final void Function(SchoolSession) onSummary;
+  final void Function(SchoolSession)? onUploadPdf;
 
   @override
   Widget build(BuildContext context) {
@@ -1942,7 +2131,7 @@ class _AttendancePage extends StatelessWidget {
       return FutureBuilder<List<AttendanceEntry>>(
         future: attendanceFuture,
         builder: (context, snapshot) => _TeacherValidationPage(
-          entries: snapshot.data ?? const [],
+          entries: _filterAttendance(snapshot.data ?? const [], searchQuery),
           isLoading: snapshot.connectionState == ConnectionState.waiting,
           error: snapshot.error,
           onValidate: onValidate,
@@ -1961,7 +2150,8 @@ class _AttendancePage extends StatelessWidget {
         children: [
           _PageHeading(
             title: 'Suivi de présence',
-            subtitle: 'Consultez vos déclarations et signalez une erreur à votre enseignant.',
+            subtitle:
+                'Consultez vos déclarations et signalez une erreur à votre enseignant.',
             action: OutlinedButton.icon(
               onPressed: () => onClaim(null),
               icon: const Icon(Icons.add_rounded, size: 18),
@@ -2042,6 +2232,10 @@ class _AttendancePage extends StatelessWidget {
                       onDeclarePresent: () => onDeclare(session, true),
                       onDeclareAbsent: () => onDeclare(session, false),
                       onClaim: () => onClaim(session),
+                      onSummary: () => onSummary(session),
+                      onUploadPdf: onUploadPdf == null
+                          ? null
+                          : () => onUploadPdf!(session),
                     ),
                   ),
               ],
@@ -2081,7 +2275,8 @@ class _TeacherValidationPage extends StatelessWidget {
         children: [
           _PageHeading(
             title: 'Validation des présences',
-            subtitle: 'Examinez les déclarations des étudiants et confirmez les feuilles d’appel.',
+            subtitle:
+                'Examinez les déclarations des étudiants et confirmez les feuilles d’appel.',
           ),
           if (error != null) _ErrorBanner(message: '$error'),
           if (isLoading) const _LoadingLine(),
@@ -2357,6 +2552,8 @@ class _SessionTile extends StatelessWidget {
     this.onDeclarePresent,
     this.onDeclareAbsent,
     this.onClaim,
+    this.onSummary,
+    this.onUploadPdf,
   });
 
   final SchoolSession session;
@@ -2364,6 +2561,8 @@ class _SessionTile extends StatelessWidget {
   final VoidCallback? onDeclarePresent;
   final VoidCallback? onDeclareAbsent;
   final VoidCallback? onClaim;
+  final VoidCallback? onSummary;
+  final VoidCallback? onUploadPdf;
 
   @override
   Widget build(BuildContext context) {
@@ -2427,7 +2626,9 @@ class _SessionTile extends StatelessWidget {
           _StatusBadge(label: status.label, color: status.color),
           if (onDeclarePresent != null ||
               onDeclareAbsent != null ||
-              onClaim != null) ...[
+              onClaim != null ||
+              onSummary != null ||
+              onUploadPdf != null) ...[
             const SizedBox(width: 5),
             PopupMenuButton<String>(
               tooltip: 'Actions sur la séance',
@@ -2436,8 +2637,20 @@ class _SessionTile extends StatelessWidget {
                 if (action == 'present') onDeclarePresent?.call();
                 if (action == 'absent') onDeclareAbsent?.call();
                 if (action == 'claim') onClaim?.call();
+                if (action == 'summary') onSummary?.call();
+                if (action == 'pdf') onUploadPdf?.call();
               },
               itemBuilder: (context) => [
+                if (onSummary != null)
+                  const PopupMenuItem(
+                    value: 'summary',
+                    child: Text('Résumé IA du cours'),
+                  ),
+                if (onUploadPdf != null)
+                  const PopupMenuItem(
+                    value: 'pdf',
+                    child: Text('Joindre un PDF'),
+                  ),
                 if ((onDeclarePresent != null || onDeclareAbsent != null) &&
                     session.status != AttendanceStatus.declared &&
                     session.status != AttendanceStatus.declaredAbsent)
@@ -2636,6 +2849,7 @@ class _NewClaimDialogState extends State<_NewClaimDialog> {
             ? const Text('Aucune séance disponible pour une réclamation.')
             : DropdownButtonFormField<SchoolSession>(
                 initialValue: _selected,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Séance concernée',
                 ),
@@ -2696,6 +2910,7 @@ class _ClaimDetailsDialogState extends State<_ClaimDetailsDialog> {
         children: [
           DropdownButtonFormField<String>(
             initialValue: _reason,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Motif'),
             items:
                 const [
@@ -2735,6 +2950,237 @@ class _ClaimDetailsDialogState extends State<_ClaimDetailsDialog> {
             ? null
             : () => Navigator.pop(context, (_reason, _details.text.trim())),
         child: const Text('Envoyer'),
+      ),
+    ],
+  );
+}
+
+class _LocalSummaryDialog extends StatefulWidget {
+  const _LocalSummaryDialog({
+    required this.courseName,
+    required this.courseCode,
+    required this.initialApiKey,
+    required this.onApiKeyChanged,
+  });
+
+  final String courseName;
+  final String courseCode;
+  final String initialApiKey;
+  final ValueChanged<String> onApiKeyChanged;
+
+  @override
+  State<_LocalSummaryDialog> createState() => _LocalSummaryDialogState();
+}
+
+class _LocalSummaryDialogState extends State<_LocalSummaryDialog> {
+  late final TextEditingController _keyController;
+  Uint8List? _pdfBytes;
+  String? _pdfName;
+  String? _error;
+  String? _summary;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _keyController = TextEditingController(text: widget.initialApiKey);
+  }
+
+  @override
+  void dispose() {
+    _keyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickPdf() async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf'],
+      withData: true,
+    );
+    if (!mounted || result == null || result.files.isEmpty) return;
+    final file = result.files.single;
+    if (file.bytes == null) {
+      setState(() => _error = 'Impossible de lire ce fichier.');
+      return;
+    }
+    setState(() {
+      _pdfBytes = file.bytes;
+      _pdfName = file.name;
+      _error = null;
+    });
+  }
+
+  Future<void> _generate() async {
+    final bytes = _pdfBytes;
+    if (bytes == null) return;
+    final key = _keyController.text.trim();
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    widget.onApiKeyChanged(key);
+    try {
+      final summary = await GeminiSummaryService(key).summarize(
+        courseName: widget.courseName,
+        courseCode: widget.courseCode,
+        pdfBytes: bytes,
+      );
+      if (!mounted) return;
+      setState(() {
+        _summary = summary;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$error';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text('Résumé IA • ${widget.courseName}'),
+    content: SizedBox(
+      width: 460,
+      child: SingleChildScrollView(
+        child: _summary == null
+            ? Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.initialApiKey.isEmpty
+                      ? 'Sans Supabase : collez votre clé gratuite et choisissez '
+                          'le PDF du cours. La clé reste en mémoire dans l’application.'
+                      : 'Sans Supabase : choisissez le PDF du cours. La clé est '
+                          'fournie au lancement de l’application.',
+                  style: const TextStyle(color: _muted, fontSize: 12),
+                ),
+                const SizedBox(height: 14),
+                if (widget.initialApiKey.isEmpty)
+                  TextField(
+                    controller: _keyController,
+                    obscureText: true,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Clé Google AI Studio (gratuite)',
+                      prefixIcon: Icon(Icons.key_outlined),
+                    ),
+                  )
+                else
+                  const InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Clé Gemini intégrée au build',
+                      prefixIcon: Icon(Icons.key_outlined),
+                    ),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Text('Disponible pour cette session'),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _loading ? null : _pickPdf,
+                  icon: const Icon(Icons.upload_file_outlined),
+                  label: const Text('Choisir un PDF'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _pdfName ?? 'Aucun PDF sélectionné',
+                  style: const TextStyle(color: _muted, fontSize: 11),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(_error!, style: const TextStyle(color: _red)),
+                ],
+              ],
+            )
+            : SelectableText(
+              _summary!,
+              style: const TextStyle(color: _ink, fontSize: 13, height: 1.5),
+            ),
+      ),
+    ),
+    actions: [
+      if (_summary == null)
+        FilledButton(
+          onPressed:
+              _loading ||
+                  _pdfBytes == null ||
+                  _keyController.text.trim().isEmpty
+              ? null
+              : _generate,
+          child: Text(_loading ? 'Génération...' : 'Générer le résumé'),
+        ),
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Fermer'),
+      ),
+    ],
+  );
+}
+
+class _SummaryDialog extends StatelessWidget {
+  const _SummaryDialog({required this.courseName, required this.future});
+
+  final String courseName;
+  final Future<Map<String, dynamic>> future;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text('Résumé IA • $courseName'),
+    content: SizedBox(
+      width: 460,
+      child: FutureBuilder<Map<String, dynamic>>(
+        future: future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 30),
+              child: Center(
+                child: CircularProgressIndicator(color: _purple),
+              ),
+            );
+          }
+          if (snapshot.hasError) {
+            return Text(
+              'Résumé indisponible : ${snapshot.error}\n\n'
+              'Le service Supabase IA est peut-être encore en attente de déploiement.',
+              style: const TextStyle(color: _red),
+            );
+          }
+          final summary = snapshot.data?['summary'] as String? ?? '';
+          final cached = snapshot.data?['cached'] == true;
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (cached)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 10),
+                    child: Text(
+                      'Résumé déjà généré pour ce PDF.',
+                      style: TextStyle(color: _muted, fontSize: 11),
+                    ),
+                  ),
+                SelectableText(
+                  summary,
+                  style: const TextStyle(color: _ink, fontSize: 13, height: 1.5),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Fermer'),
       ),
     ],
   );
@@ -2801,6 +3247,57 @@ class _ErrorBanner extends StatelessWidget {
   );
 }
 
+bool _contains(String value, String query) =>
+    value.toLowerCase().contains(query);
+
+List<SchoolSession> _filterSessions(
+  List<SchoolSession> sessions,
+  String query,
+) {
+  if (query.isEmpty) return sessions;
+  return sessions
+      .where(
+        (session) =>
+            _contains(session.courseName, query) ||
+            _contains(session.courseCode, query) ||
+            _contains(session.room, query) ||
+            _contains(session.teacherName, query) ||
+            _contains(_statusFor(session.status).label, query),
+      )
+      .toList();
+}
+
+List<AttendanceClaim> _filterClaims(
+  List<AttendanceClaim> claims,
+  String query,
+) {
+  if (query.isEmpty) return claims;
+  return claims
+      .where(
+        (claim) =>
+            _contains(claim.courseName, query) ||
+            _contains(claim.reason, query) ||
+            _contains(claim.details, query) ||
+            _contains(claim.status, query),
+      )
+      .toList();
+}
+
+List<AttendanceEntry> _filterAttendance(
+  List<AttendanceEntry> entries,
+  String query,
+) {
+  if (query.isEmpty) return entries;
+  return entries
+      .where(
+        (entry) =>
+            _contains(entry.studentName, query) ||
+            _contains(entry.courseName, query) ||
+            _contains(_statusFor(entry.status).label, query),
+      )
+      .toList();
+}
+
 String _shortDate(DateTime date) =>
     '${_twoDigits(date.day)}/${_twoDigits(date.month)}/${date.year}';
 
@@ -2840,7 +3337,7 @@ final demoSessions = [
     id: 'demo-session-1',
     courseName: 'Algorithmique avancée',
     courseCode: 'INF-204',
-    teacherName: 'M. Karim Bensaïd',
+    teacherName: 'Mme Linda Wadaa',
     room: 'Salle B12',
     startsAt: DateTime(_today.year, _today.month, _today.day, 8, 30),
   ),
@@ -2848,7 +3345,7 @@ final demoSessions = [
     id: 'demo-session-2',
     courseName: 'Bases de données',
     courseCode: 'INF-216',
-    teacherName: 'Mme Salma Idrissi',
+    teacherName: 'Mme Linda Wadaa',
     room: 'Labo 03',
     startsAt: DateTime(_today.year, _today.month, _today.day, 10, 30),
     status: AttendanceStatus.declared,
@@ -2857,7 +3354,7 @@ final demoSessions = [
     id: 'demo-session-3',
     courseName: 'Réseaux informatiques',
     courseCode: 'INF-220',
-    teacherName: 'M. Karim Bensaïd',
+    teacherName: 'Mme Linda Wadaa',
     room: 'Salle A05',
     startsAt: DateTime(_today.year, _today.month, _today.day, 14, 0),
   ),
@@ -2865,7 +3362,7 @@ final demoSessions = [
     id: 'demo-session-4',
     courseName: 'Développement mobile',
     courseCode: 'INF-231',
-    teacherName: 'Mme Lina Amrani',
+    teacherName: 'Mme Linda Wadaa',
     room: 'Labo 02',
     startsAt: DateTime(_today.year, _today.month, _today.day, 16, 0),
   ),
@@ -2877,7 +3374,8 @@ final demoClaims = [
     sessionId: 'demo-session-1',
     courseName: 'Algorithmique avancée',
     reason: 'Présent en cours',
-    details: 'J’étais présent le jour du contrôle, mais mon absence apparaît dans le relevé.',
+    details:
+        'J’étais présent le jour du contrôle, mais mon absence apparaît dans le relevé.',
     status: 'pending',
     createdAt: DateTime.now().subtract(const Duration(hours: 3)),
   ),
@@ -2905,7 +3403,7 @@ final demoAttendanceEntries = [
   AttendanceEntry(
     id: 'demo-attendance-1',
     sessionId: 'demo-session-1',
-    studentName: 'Yasmine El Amrani',
+    studentName: 'Dina Jouini',
     courseName: 'Algorithmique avancée',
     startsAt: _today,
     status: AttendanceStatus.declared,

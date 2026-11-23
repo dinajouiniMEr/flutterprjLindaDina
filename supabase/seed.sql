@@ -34,12 +34,12 @@ begin
 
   insert into public.profiles (id, full_name)
   values
-    (v_student_id, 'Yasmine El Amrani'),
-    (v_teacher_id, 'Karim Bensaid')
+    (v_student_id, 'Dina Jouini'),
+    (v_teacher_id, 'Linda Wadaa')
   on conflict (id) do nothing;
 
   update public.profiles
-  set full_name = 'Yasmine El Amrani',
+  set full_name = 'Dina Jouini',
       role = 'student',
       class_name = v_demo_class
   where id = v_student_id;
@@ -48,7 +48,7 @@ begin
   end if;
 
   update public.profiles
-  set full_name = 'Karim Bensaid',
+  set full_name = 'Linda Wadaa',
       role = 'teacher',
       class_name = v_demo_class
   where id = v_teacher_id;
@@ -104,7 +104,7 @@ begin
   select
     courses.course_name,
     courses.course_code,
-    'Karim Bensaid',
+    'Linda Wadaa',
     v_teacher_id,
     v_demo_class,
     courses.room,

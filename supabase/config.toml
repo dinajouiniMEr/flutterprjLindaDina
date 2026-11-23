@@ -1,0 +1,4 @@
+project_id = "hrcjrzjkdrikmhtovozo"
+
+[functions.summarize-course]
+verify_jwt = true

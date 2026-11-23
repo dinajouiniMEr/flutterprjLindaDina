@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 enum AttendanceStatus {
@@ -144,6 +146,14 @@ class AttendanceClaim {
   }
 }
 
+String _aiErrorMessage(Object error) {
+  final text = error.toString();
+  final match =
+      RegExp(r'error:\s*([^}\)]+)').firstMatch(text) ??
+      RegExp(r'message:\s*([^}\)]+)').firstMatch(text);
+  return match?.group(1)?.trim() ?? 'Le service IA est indisponible.';
+}
+
 class AttendanceRepository {
   AttendanceRepository(this._client);
 
@@ -259,6 +269,50 @@ class AttendanceRepository {
         .from('attendance_records')
         .update({'status': status, 'marked_by': _userId})
         .eq('id', attendanceId);
+  }
+
+  Future<Map<String, dynamic>> summarizeCourse(String sessionId) async {
+    late final dynamic data;
+    try {
+      final response = await _client.functions.invoke(
+        'summarize-course',
+        body: {'sessionId': sessionId},
+      );
+      data = response.data;
+    } catch (error) {
+      throw StateError(_aiErrorMessage(error));
+    }
+    if (data is! Map) {
+      throw StateError('Réponse du service IA invalide.');
+    }
+    final result = Map<String, dynamic>.from(data);
+    final error = result['error'];
+    if (error != null) throw StateError('$error');
+    return result;
+  }
+
+  Future<void> attachCoursePdf(
+    String sessionId, {
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    if (!fileName.toLowerCase().endsWith('.pdf')) {
+      throw ArgumentError.value(fileName, 'fileName', 'Seuls les PDF sont acceptés.');
+    }
+    final path = 'courses/$sessionId.pdf';
+    await _client.storage.from('course_pdfs').uploadBinary(
+      path,
+      bytes,
+      fileOptions: const FileOptions(
+        contentType: 'application/pdf',
+        upsert: true,
+      ),
+    );
+    await _client
+        .from('sessions')
+        .update({'pdf_path': path})
+        .eq('id', sessionId);
+    await _client.from('course_summaries').delete().eq('session_id', sessionId);
   }
 
   Future<void> signOut() => _client.auth.signOut();

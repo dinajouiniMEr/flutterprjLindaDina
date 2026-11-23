@@ -48,6 +48,57 @@ Pour vérifier que la base contient les données de démo, les dernières requê
 de `supabase/seed.sql` affichent les profils, les séances, les présences et les
 réclamations. Connectez-vous ensuite avec les comptes Auth correspondants.
 
+## Résumé IA d'un cours (clé Google gratuite)
+
+Le résumé utilise Gemini (`gemini-3.5-flash-lite`, gratuit).
+
+### Mode démo sans Supabase (disponible tout de suite)
+
+Option A — injecter la clé au lancement, sans champ à remplir :
+
+```powershell
+flutter run --dart-define=GEMINI_API_KEY=votre_cle_ici
+```
+
+Pour un APK : `flutter build apk --dart-define=GEMINI_API_KEY=votre_cle_ici`.
+La clé est alors compilée dans le binaire : ne distribuez pas cet APK à quelqu'un
+qui ne doit pas voir la clé, et ne commitez jamais la vraie clé.
+
+Option B — sans `dart-define` : au premier **Résumé IA du cours**, le dialogue
+demande une clé créée dans https://aistudio.google.com/apikey. Dans ce cas, la
+clé reste uniquement en mémoire pendant la session.
+
+Dans les deux cas : ouvrez le menu `⋯` d'une séance, choisissez le PDF depuis
+l'appareil (10 Mo maximum), puis **Générer le résumé**. Aucun appel ne passe par
+Supabase dans ce mode.
+
+### Mode Supabase (à faire par la personne qui administre le projet)
+
+La clé IA reste sur le serveur, jamais dans Flutter.
+
+1. Depuis la racine du projet :
+
+```powershell
+supabase login
+supabase link --project-ref hrcjrzjkdrikmhtovozo
+supabase db push
+supabase secrets set GEMINI_API_KEY=votre_cle_ici
+supabase functions deploy summarize-course
+```
+
+Variante sans CLI : exécutez
+`supabase/migrations/20261123000100_course_pdf_ai.sql` dans le SQL Editor, puis
+ajoutez le secret `GEMINI_API_KEY` dans **Edge Functions → Secrets**.
+
+2. Dans l'application avec un compte enseignant ou directeur, ouvrez le menu
+   `⋯` d'une séance puis **Joindre un PDF** (10 Mo maximum). Ensuite, l'étudiante
+   ouvre le même menu et choisit **Résumé IA du cours**.
+3. Le résumé est mis en cache tant que le PDF ne change pas ; remplacer le PDF
+   le invalide automatiquement.
+
+Le modèle gratuit a des limites de requêtes : en cas de quota épuisé,
+l'application affiche un message et le cache reste consultable.
+
 ## Vérification
 
 ```powershell

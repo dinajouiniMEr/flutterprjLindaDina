@@ -1,4 +1,7 @@
 # Miscellaneous
+supabase/.temp/
+.env
+*.env
 *.class
 *.log
 *.pyc
